@@ -55,7 +55,7 @@ for machine in data['machines']:
     on_off_cost = machine['power_up_cost'] + machine['power_down_cost']
     cost += model.sum([on_off_cost*model.presence_of(on_interval) for on_interval in on_intervals[id]])
 
-task_intervals = []
+task_intervals = {m['id']: [] for m in data['machines']}
 
 for task in data['tasks']:
     task_interval = model.interval_var(size=task['duration'], name='task_{}'.format(task['id']))
@@ -76,57 +76,50 @@ for task in data['tasks']:
         for i in range(num_resources):
             machine_resources[m_id][i] += model.pulse(
                 task_machine_interval, task['resource_usage'][i])
+        task_intervals[m_id].append((task, task_machine_interval))
 
     model.add(model.alternative(task_interval, task_machines_intervals))
-    task_intervals.append((task, task_interval))
 
 for machine in data['machines']:
     id = machine['id']
-    for i in range(num_resources):
-        model.add(model.less_or_equal(
-            machine_resources[id][i],
-            machine['resource_capacities'][i]))
-        # model.add(model.cumul_range(machine_resources[id][i], 0, machine['resource_capacities'][i]))
+    model.add(model.cumul_range(machine_resources[id][i], 0, machine['resource_capacities'][i]))
 
 model.add(model.minimize(cost))
 msol = model.solve(
-    params=CpoParameters(TimeLimit=300),
+    params=CpoParameters(TimeLimit=30),
     trace_log=False)
 
 msol.print_solution()
 
 # Draw solution
 if msol and visu.is_visu_enabled():
-    visu.timeline("Solution for " + filename)
-    visu.panel("Energy")
-    visu.pause(energy)
-    for id, intervals in on_intervals.items():
-        vars = []
-        for j in range(len(intervals)):
-            val = msol.get_value(intervals[j])
+    for m in data['machines']:
+        id = m['id']
+        ons = []
+        for j in range(len(on_intervals[id])):
+            val = msol.get_value(on_intervals[id][j])
             if val != ():
-                vars.append((msol.get_var_solution(intervals[j]), j, 'M_{}_{}'.format(id, str(j))))
-        visu.sequence(name='Machines_{}'.format(id), intervals=vars)
+                ons.append((msol.get_var_solution(on_intervals[id][j]), j, 'M_{}_{}'.format(id, str(j))))
 
-    tasks = []
-    for task, interval in task_intervals:
-        tasks.append((msol.get_var_solution(interval), 1, interval.get_name()))
-    visu.sequence(name='Tasks', intervals=tasks)
-    visu.function(name='energy', segments=energy)
+        tasks = []
+        for task, interval in task_intervals[id]:
+            val = msol.get_value(interval)
+            if val != ():
+                tasks.append((msol.get_var_solution(interval), 1, interval.get_name()))
+        if len(tasks) > 0 or len(ons) > 0:
+            visu.timeline("Machine " + str(id))
+            visu.panel("Tasks")
+            visu.pause(energy)
+            visu.sequence(name='Machine'.format(id), intervals=ons)
+            visu.sequence(name='Tasks', intervals=tasks)
 
-    for i in data['machines']:
-        for j in range(num_resources):
-            visu.panel('resources_{}_{}'.format(i, j))
-            res = CpoStepFunction()
-            for task, interval in task_intervals:
-                if msol.get_value(interval) != ():
-                    var = msol.get_var_solution(interval)
-                    res.add_value(var.get_start(), var.get_end(), task['resource_usage'][j])
-            visu.function(segments=res, color=j)
+            for j in range(num_resources):
+                visu.panel('resources_{}_{}'.format(i, j))
+                res = CpoStepFunction()
+                for task, interval in task_intervals[id]:
+                    if msol.get_value(interval) != ():
+                        var = msol.get_var_solution(interval)
+                        res.add_value(var.get_start(), var.get_end(), task['resource_usage'][j])        
+                visu.function(segments=res, color=j)
 
-    # for id, resources in machine_resources.items():
-    #     for i in range(num_resources):
-    #         print(msol.get_value(resources[i]))
-    #         print(resources[i])
-            # visu.function(name='machine_{}_resource_{}'.format(id, i), segments=resources[i])
     visu.show()
