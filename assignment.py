@@ -51,7 +51,7 @@ for machine in data['machines']:
         model.add(model.end_of(on_i) <= timeslots)
         on_i.set_size_min(1)
         machine_on_off[id] += model.pulse(on_i, 1)
-        model.add(model.always_in(tasks_running_on_machines[id], on_i, 1, 1))
+        model.add(model.always_constant(tasks_running_on_machines[id], on_i, True, True))
 
         # Add machine idle consumption
         cost += (model.end_eval(on_i, energy) - model.start_eval(on_i, energy)) * machine['idle_consumption']
@@ -108,7 +108,8 @@ if msol and visu.is_visu_enabled():
     for m in data['machines']:
         id = m['id']
         ons = []
-        cost_sum = 0
+        cost_sum_a = 0
+        cost_sum_b = 0
         energy_costs=CpoStepFunction()
         for j in range(len(on_intervals[id])):
             val = msol.get_value(on_intervals[id][j])
@@ -121,14 +122,15 @@ if msol and visu.is_visu_enabled():
                 end_value = energy.get_value(end)
                 cost_a = (end_value - start_value) * m['idle_consumption']
                 cost_b = 0
-                for i in range(start, end):
+                for i in range(start, end-1):
                     cost_i = data['energy_prices'][i] * m['idle_consumption']
                     cost_b += cost_i
                     energy_costs.add_value(i, i+1, cost_i)
-                cost_sum += cost_b
-                print('{} {} {} {}'.format(start_value, end_value, cost_a, cost_b))
-                cost_sum += m['power_up_cost'] + m['power_down_cost']
-        # print(str(cost_sum))
+                cost_sum_a += cost_a
+                cost_sum_b += cost_b
+                print('{} {}'.format(cost_a, cost_b))
+                cost_sum_a += m['power_up_cost'] + m['power_down_cost']
+                cost_sum_b += m['power_up_cost'] + m['power_down_cost']
 
         tasks = []
         for task, interval in task_intervals[id]:
@@ -150,15 +152,14 @@ if msol and visu.is_visu_enabled():
                     end_value = energy.get_value(end)
                     cost_a = (end_value - start_value) * task['power_consumption']
                     cost_b = 0
-                    # print('{} {}'.format(start, end))
-                    for i in range(start, end):
-                        # print(str(i))
+                    for i in range(start, end-1):
                         cost_i = data['energy_prices'][i] * task['power_consumption']
                         cost_b += cost_i
                         energy_costs.add_value(i, i+1, cost_i)
-                    cost_sum += cost_b
-                    print('{} {} {} {}'.format(start_value, end_value, cost_a, cost_b))
-            visu.function(name='Cost={}'.format(cost_sum), segments=energy_costs)
+                    cost_sum_a += cost_a
+                    cost_sum_b += cost_b
+                    print('{} {}'.format(cost_a, cost_b))
+            visu.function(name='Cost={}, {}'.format(cost_sum_a, cost_sum_b), segments=energy_costs)
             # visu.function(name='Energy', segments=energy)
 
             for j in range(num_resources):
