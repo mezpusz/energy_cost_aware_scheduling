@@ -14,20 +14,29 @@ import docplex.cp.utils_visu as visu
 
 model = CpoModel()
 timeslots = int((24*60)/data['time_resolution'])
+
+# Create energy function
+# It can be evaluated at start and end of intervals
+# so the accumulated value is added to the function
 energy = CpoSegmentedFunction(name='energy')
 energy_sum = 0
-energy_segments = len(data['energy_prices'])
-assert(energy_segments == timeslots)
+assert(len(data['energy_prices']) == timeslots)
 for i in range(timeslots):
     energy_sum += data['energy_prices'][i]
     energy.add_value(i, i+1, energy_sum)
+# Ensure the energy sum is defined to the end
 energy.add_value(timeslots, timeslots+1, energy_sum)
+
 num_tasks = len(data['tasks'])
 num_resources = data['resources']
-machine_resources = {m['id']: [model.step_at(0,0),
-                                model.step_at(0,0),
-                                model.step_at(0,0)] for m in data['machines']}
+num_machines = len(data['machines'])
+
+machine_resources = {m['id']: [model.step_at(0,0) for i in range(num_resources)]
+                               for m in data['machines']}
 machine_on_off = {m['id']: model.step_at(0, 0) for m in data['machines']}
+# machine_on_off = {m['id']: model.state_function(
+    # trmtx=model.transition_matrix([[0]]),
+    # name='m_o_{}'.format(m['id'])) for m in data['machines']}
 tasks_running_on_machines = {m['id']: model.state_function(name='tasks_running_on_machines_{}'.format(m['id'])) for m in data['machines']}
 on_intervals = {m['id']: model.interval_var_list(min(timeslots, num_tasks),
                 name='machine_{}'.format(m['id']),
@@ -39,57 +48,65 @@ for machine in data['machines']:
 
     # Sequencing of intervals
     num_intervals = len(on_intervals[id])
-    seq = model.sequence_var(on_intervals[id])
-    model.add(model.no_overlap(seq,model.transition_matrix(
-        [[(1) for j in range(num_intervals)] for i in range(num_intervals)])))
+    # seq = model.sequence_var(on_intervals[id])
+    # model.add(model.no_overlap(seq, model.transition_matrix(
+        # [[(1) for j in range(num_intervals)] for i in range(num_intervals)])))
     for i in range(1, num_intervals):
         model.add(model.if_then(model.presence_of(on_intervals[id][i]), model.presence_of(on_intervals[id][i-1])))
-        model.add(model.before(seq, on_intervals[id][i-1], on_intervals[id][i]))
-    # 
+        # model.add(model.before(seq, on_intervals[id][i-1], on_intervals[id][i]))
+        model.add(model.end_before_start(on_intervals[id][i-1], on_intervals[id][i], 1))
+
     for on_i in on_intervals[id]:
         model.add(model.start_of(on_i) >= 0)
         model.add(model.end_of(on_i) <= timeslots)
         on_i.set_size_min(1)
+
+        # Bind with task intervals
         machine_on_off[id] += model.pulse(on_i, 1)
+        # model.add(model.always_equal(machine_on_off[id], on_i, 1, True, True))
         model.add(model.always_constant(tasks_running_on_machines[id], on_i, True, True))
 
-        # Add machine idle consumption
-        cost += (model.end_eval(on_i, energy) - model.start_eval(on_i, energy)) * machine['idle_consumption']
+    # Add machine idle consumption
+    cost += model.sum([(model.end_eval(on_i, energy) - model.start_eval(on_i, energy))
+        * machine['idle_consumption'] for on_i in on_intervals[id]])
 
     # Add power up/down cost
     on_off_cost = machine['power_up_cost'] + machine['power_down_cost']
     cost += model.sum([on_off_cost*model.presence_of(on_interval) for on_interval in on_intervals[id]])
 
-task_intervals = {m['id']: [] for m in data['machines']}
+task_intervals_on_machines = {m['id']: [] for m in data['machines']}
+task_intervals = []
 
 for task in data['tasks']:
     task_interval = model.interval_var(size=task['duration'], name='task_{}'.format(task['id']))
     task_interval.set_start_min(task['earliest_start_time'])
     task_interval.set_end_max(task['latest_end_time'])
-    task_machines_intervals = []
-    for machine in data['machines']:
-        m_id = machine['id']
-        task_machine_interval = model.interval_var(size=task['duration'],
-                                                   name='task_{}_on_{}'.format(task['id'], m_id),
-                                                   optional=True)
-        model.add(model.always_equal(tasks_running_on_machines[m_id], task_machine_interval, 1))
-        model.add(model.always_in(machine_on_off[m_id], task_machine_interval, 1, 1))
-
-        # Add power consumption by task
-        cost += (model.end_eval(task_machine_interval, energy) - model.start_eval(task_machine_interval, energy)) * task['power_consumption']
-
-        task_machines_intervals.append(task_machine_interval)
+    task_machine_intervals = model.interval_var_list(num_machines,
+                name='task_{}_on_'.format(task['id']),
+                optional=True)
+    
+    for i in range(num_machines):
+        id = data['machines'][i]['id']
+        # Bind with machine switched on intervals
+        model.add(model.always_equal(tasks_running_on_machines[id], task_machine_intervals[i], 1))
+        model.add(model.always_in(machine_on_off[id], task_machine_intervals[i], 1, 1))
+        # model.add(model.always_constant(machine_on_off[id], task_machine_intervals[i]))
 
         # Add resource usage by task
-        for i in range(num_resources):
-            machine_resources[m_id][i] += model.pulse(
-                task_machine_interval, task['resource_usage'][i])
+        for j in range(num_resources):
+            machine_resources[id][j] += model.pulse(
+                task_machine_intervals[i], task['resource_usage'][j])
 
         # For visualization
-        task_intervals[m_id].append((task, task_machine_interval))
+        task_intervals_on_machines[id].append((task, task_machine_intervals[i]))
 
     # Only one interval will be effective
-    model.add(model.alternative(task_interval, task_machines_intervals))
+    model.add(model.alternative(task_interval, task_machine_intervals))
+    task_intervals.append((task, task_interval))
+
+# Add power consumption by tasks
+cost += model.sum([(model.end_eval(task_i, energy) - model.start_eval(task_i, energy))
+                  * task['power_consumption'] for task, task_i in task_intervals])
 
 for machine in data['machines']:
     id = machine['id']
@@ -98,7 +115,7 @@ for machine in data['machines']:
 
 model.add(model.minimize(cost))
 msol = model.solve(
-    params=CpoParameters(TimeLimit=10),
+    params=CpoParameters(TimeLimit=300),
     trace_log=True)
 
 msol.print_solution()
@@ -133,7 +150,7 @@ if msol and visu.is_visu_enabled():
                 cost_sum_b += m['power_up_cost'] + m['power_down_cost']
 
         tasks = []
-        for task, interval in task_intervals[id]:
+        for task, interval in task_intervals_on_machines[id]:
             val = msol.get_value(interval)
             if val != ():
                 tasks.append((msol.get_var_solution(interval), 1, interval.get_name()))
@@ -143,7 +160,7 @@ if msol and visu.is_visu_enabled():
             visu.sequence(name='Machine', intervals=ons)
             visu.sequence(name='Tasks', intervals=tasks)
 
-            for task, interval in task_intervals[id]:
+            for task, interval in task_intervals_on_machines[id]:
                 if msol.get_value(interval) != ():
                     var = msol.get_var_solution(interval)
                     start = var.get_start()
@@ -165,7 +182,7 @@ if msol and visu.is_visu_enabled():
             for j in range(num_resources):
                 visu.panel('resources_{}'.format(j))
                 res = CpoStepFunction()
-                for task, interval in task_intervals[id]:
+                for task, interval in task_intervals_on_machines[id]:
                     if msol.get_value(interval) != ():
                         var = msol.get_var_solution(interval)
                         res.add_value(var.get_start(), var.get_end(), task['resource_usage'][j])
