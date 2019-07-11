@@ -1,0 +1,51 @@
+* Some constraints have a particular order to be defined otherwise weird
+  things happen:
+    * Machine constraints (i.e. the cumul and state functions binding them
+      with the task intervals) cannot be stated after task constraints,
+      otherwise too big search space (2^1000) is reported.
+    * Resource capacities can only be stated after the corresponding cumul
+      functions, otherwise the constraints are not enforced. 
+* Energy function is calculated in the following manner: a segmented function
+  can be evaluated at the start/end/size/length of an interval, but it cannot
+  be "integrated", so a function part cannot be summed. I create a segmented
+  function which contains at i the sum of the first i energy costs. This then
+  can be evaluated at end of interval and start of interval, the difference
+  between the two gives the integral.
+* Got negative values for a lot of cost subvalues which should be non
+  negative. Turns out that the energy sum function which is non decreasing
+  had 0 at the end of the last timeslot, thus making costs of intervals
+  ending at the last timeslot negative. 
+* Created two phases for the model, first one has all constraints but
+  cost is without machine idle costs and on/off costs, second phase is
+  with all costs and a starting point from the first phase.
+* First phase only contains fixed duration intervals, so a different cost
+  calculation is used: we have an array of segmented functions of ever
+  increasing parts of the energy costs. With this, only the start_eval
+  should be used.
+* Added search phase to fix task intervals first, which does not find any
+  solutions for a while.
+* Search phase with optional task intervals on machines is more effective,
+  it seems to find the best solution in a short amount of time (for sample01).
+
+* Tried so far:
+    * Summing up energies in different forms: arrays of arrays, arrays of segmented
+      functions, summing up the overlaps between fixed size intervals and model
+      intervals
+    * Making stronger inference with additional binary variables: variables for
+      alternative intervals in machines that sum up to 1
+    * Using binary variables instead of optional intervals to denote which task is
+      on which machine, using height_at_start == resource*binary to create variable
+      pulses, used overlap_length == size_of*binary instead of state+cumul functions
+      to bind machine and task intervals
+    * Making soft constraints of resource capacities and penalizing the peak in cost
+      function
+    * Using integer variables to denote the start of tasks which are binded to actual
+      intervals and try to find a good search phase with value+var selectors that
+      make the search faster
+    * Use heuristics to get a better lower bound:
+        * prohibit overlaps between pairs of tasks on machines that have a resource
+          need that is greater than half the capacity for some resource on that
+          machine
+        * prohibit overlaps between pairs of tasks on machines that have a summed
+          resource need greater than the capacity for some resource on that machine
+    * Try different search types, extended inference for cumul and state functions
