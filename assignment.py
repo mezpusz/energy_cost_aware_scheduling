@@ -3,7 +3,6 @@
 import json
 import sys
 
-from docplex.cp.expression import INTERVAL_MAX
 from docplex.cp.function import CpoSegmentedFunction, CpoStepFunction
 from docplex.cp.model import CpoModel
 from docplex.cp.parameters import CpoParameters
@@ -50,7 +49,6 @@ for i in range(1, TIMESLOTS):
         energy_sum -= energy_prices[j-i]
         energy_sum += energy_prices[j]
         energy_intervals.set_value(j-i+1, j-i+2, energy_sum)
-    energy_intervals.set_value(TIMESLOTS-i+1, INTERVAL_MAX, 10000)
     energy_intervals_array.append(energy_intervals)
 
 model = CpoModel()
@@ -260,7 +258,7 @@ if msol and visu.is_visu_enabled():
                     cost_i = energy_prices[i] * task['power_consumption']
                     energy_costs.add_value(i, i+1, cost_i)
         # Do not show this machine if no task if assigned to it
-        if len(tasks) > 0 or len(ons) > 0:
+        if tasks and ons:
             visu.timeline("Machine " + str(m_id), 0, int(TIMESLOTS))
             visu.panel("Tasks")
             visu.sequence(name='Machine', intervals=ons)
