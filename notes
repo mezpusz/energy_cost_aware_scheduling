@@ -27,7 +27,8 @@
 * Search phase with optional task intervals on machines is more effective,
   it seems to find the best solution in a short amount of time (for sample01).
 
-* Tried so far:
+* Tried so far (these were mostly inferior to the submitted solution, thus never
+  made it into it, but worth mentioning in my opinion):
     * Summing up energies in different forms: arrays of arrays, arrays of segmented
       functions, summing up the overlaps between fixed size intervals and model
       intervals
@@ -49,3 +50,10 @@
         * prohibit overlaps between pairs of tasks on machines that have a summed
           resource need greater than the capacity for some resource on that machine
     * Try different search types, extended inference for cumul and state functions
+    * Adding everything to a single timeline and thus not needing to use optional
+      intervals for tasks (i.e. machine 0 start at zero, machine 1 start at
+      timeslots+1, etc.)
+    * Relaxing the resource capacity constraints (without which the lower bound was
+      set otherwise) and adding the constraints one by one to increase the lower
+      bound in each step (it did give better lower bounds but the process started
+      to struggle after a while)
